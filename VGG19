@@ -1,0 +1,111 @@
+# Install necessary libraries
+!pip install tensorflow keras numpy matplotlib scikit-learn
+
+# Import libraries
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import VGG19
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from google.colab import drive
+
+# Mount Google Drive
+drive.mount('/content/drive')
+
+# Dataset path and constants
+dataset_path = '/content/drive/MyDrive/Rice_Leaf_Disease'
+IMG_SIZE = (224, 224)
+BATCH_SIZE = 32
+
+# Data augmentation and preprocessing
+datagen = ImageDataGenerator(
+    rescale=1./255,
+    validation_split=0.2,
+    rotation_range=20,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    brightness_range=[0.8, 1.2],
+    shear_range=0.2
+)
+
+train_generator = datagen.flow_from_directory(
+    dataset_path,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode='categorical',
+    subset='training'
+)
+
+val_generator = datagen.flow_from_directory(
+    dataset_path,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode='categorical',
+    subset='validation'
+)
+
+# Load VGG19 base model
+base_model = VGG19(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+
+# Freeze base model layers
+for layer in base_model.layers:
+    layer.trainable = False
+
+# Add custom classification head
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dropout(0.3)(x)
+x = Dense(512, activation='relu')(x)
+x = Dropout(0.3)(x)
+predictions = Dense(train_generator.num_classes, activation='softmax')(x)
+
+model = Model(inputs=base_model.input, outputs=predictions)
+
+# Compile the model
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Callbacks
+checkpoint = ModelCheckpoint('vgg19_best.h5', monitor='val_accuracy', save_best_only=True, mode='max')
+early_stop = EarlyStopping(monitor='val_loss', patience=2, restore_best_weights=True)
+
+# Train the model
+history = model.fit(
+    train_generator,
+    validation_data=val_generator,
+    epochs=5,
+    callbacks=[checkpoint, early_stop]
+)
+
+# Evaluate the model
+model.load_weights('vgg19_best.h5')
+val_loss, val_acc = model.evaluate(val_generator)
+print(f"Validation Accuracy: {val_acc*100:.2f}%")
+
+# Predictions and classification report
+val_generator.reset()
+y_pred = np.argmax(model.predict(val_generator), axis=1)
+y_true = val_generator.classes
+labels = list(val_generator.class_indices.keys())
+
+print("Classification Report:")
+print(classification_report(y_true, y_pred, target_names=labels))
+
+# Plot training history
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Accuracy')
+plt.plot(history.history['val_accuracy'], label='Val Accuracy')
+plt.title('Accuracy')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Val Loss')
+plt.title('Loss')
+plt.legend()
+
+plt.show()
